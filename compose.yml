@@ -40,6 +40,7 @@ services:
 
   mysql:
     image: mysql:9.7
+    command: --slow-query-log=1 --slow-query-log-file=/var/lib/mysql/mysql-slow.log --long-query-time=0
     environment:
       #- "TZ=Asia/Tokyo"
       - "MYSQL_ROOT_HOST=%"
