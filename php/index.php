@@ -302,7 +302,14 @@ $app->get('/', function (Request $request, Response $response) {
     $me = $this->get('helper')->get_session_user();
 
     $db = $this->get('db');
-    $ps = $db->prepare('SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC');
+        $ps = $db->prepare(
+        'SELECT p.`id`, p.`user_id`, p.`body`, p.`mime`, p.`created_at` ' .
+        'FROM `posts` AS p ' .
+        'JOIN `users` AS u ON p.`user_id` = u.`id` ' .
+        'WHERE u.`del_flg` = 0 ' .
+        'ORDER BY p.`created_at` DESC ' .
+        'LIMIT ' . POSTS_PER_PAGE
+    );
     $ps->execute();
     $results = $ps->fetchAll(PDO::FETCH_ASSOC);
     $posts = $this->get('helper')->make_posts($results);
