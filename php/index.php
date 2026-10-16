@@ -131,31 +131,68 @@ $container->set('helper', function ($c) {
             $options += ['all_comments' => false];
             $all_comments = $options['all_comments'];
 
+            if (count($results) === 0) {
+                return [];
+            }
+
+            // 1. 投稿者をまとめて1回で取得する
+            $user_ids = array_values(array_unique(array_column($results, 'user_id')));
+            $placeholder = implode(',', array_fill(0, count($user_ids), '?'));
+            $ps = $this->db()->prepare("SELECT `id`, `account_name`, `del_flg` FROM `users` WHERE `id` IN ({$placeholder})");
+            $ps->execute($user_ids);
+            $users = [];
+            foreach ($ps->fetchAll(PDO::FETCH_ASSOC) as $user) {
+                $users[$user['id']] = $user;
+            }
+
+            // 2. BANされていないユーザーの投稿だけを、最大 POSTS_PER_PAGE 件選ぶ
             $posts = [];
             foreach ($results as $post) {
-                $post['comment_count'] = $this->fetch_first('SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?', $post['id'])['count'];
-                $query = 'SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC';
-                if (!$all_comments) {
-                    $query .= ' LIMIT 3';
+                $user = $users[$post['user_id']] ?? null;
+                if ($user === null || $user['del_flg'] != 0) {
+                    continue;
                 }
-
-                $ps = $this->db()->prepare($query);
-                $ps->execute([$post['id']]);
-                $comments = $ps->fetchAll(PDO::FETCH_ASSOC);
-                foreach ($comments as &$comment) {
-                    $comment['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $comment['user_id']);
-                }
-                unset($comment);
-                $post['comments'] = array_reverse($comments);
-
-                $post['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $post['user_id']);
-                if ($post['user']['del_flg'] == 0) {
-                    $posts[] = $post;
-                }
+                $post['user'] = $user;
+                $posts[] = $post;
                 if (count($posts) >= POSTS_PER_PAGE) {
                     break;
                 }
             }
+            if (count($posts) === 0) {
+                return [];
+            }
+
+            // 3. 選んだ投稿のコメント数をまとめて1回で取得する
+            $post_ids = array_column($posts, 'id');
+            $placeholder = implode(',', array_fill(0, count($post_ids), '?'));
+            $ps = $this->db()->prepare("SELECT `post_id`, COUNT(*) AS `count` FROM `comments` WHERE `post_id` IN ({$placeholder}) GROUP BY `post_id`");
+            $ps->execute($post_ids);
+            $comment_counts = [];
+            foreach ($ps->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $comment_counts[$row['post_id']] = $row['count'];
+            }
+
+            // 4. 投稿ごとのコメントを、書いたユーザーと一緒に（JOINして）取得する
+            $query = 'SELECT c.`comment`, c.`created_at`, u.`account_name` FROM `comments` AS c JOIN `users` AS u ON c.`user_id` = u.`id` WHERE c.`post_id` = ? ORDER BY c.`created_at` DESC';
+            if (!$all_comments) {
+                $query .= ' LIMIT 3';
+            }
+            $ps = $this->db()->prepare($query);
+            foreach ($posts as &$post) {
+                $post['comment_count'] = $comment_counts[$post['id']] ?? 0;
+                $ps->execute([$post['id']]);
+                $comments = [];
+                foreach ($ps->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                    $comments[] = [
+                        'comment' => $row['comment'],
+                        'created_at' => $row['created_at'],
+                        'user' => ['account_name' => $row['account_name']],
+                    ];
+                }
+                $post['comments'] = array_reverse($comments);
+            }
+            unset($post);
+
             return $posts;
         }
 
